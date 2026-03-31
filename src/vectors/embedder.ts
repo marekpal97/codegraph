@@ -135,9 +135,9 @@ export class TextEmbedder {
         ? (progress: { status: string; file?: string; progress?: number }) => {
             if (progress.status === 'progress' && progress.file && progress.progress) {
               const pct = Math.round(progress.progress);
-              process.stdout.write(`\rDownloading ${progress.file}: ${pct}%`);
+              process.stderr.write(`\rDownloading ${progress.file}: ${pct}%`);
             } else if (progress.status === 'done') {
-              process.stdout.write('\n');
+              process.stderr.write('\n');
             }
           }
         : undefined,
@@ -336,11 +336,30 @@ export class TextEmbedder {
     signature?: string;
     docstring?: string;
     filePath: string;
+    isExported?: boolean;
+    isAsync?: boolean;
+    isStatic?: boolean;
+    isAbstract?: boolean;
+    visibility?: string;
+    decorators?: string[];
+    typeParameters?: string[];
   }): string {
     const parts: string[] = [];
 
-    // Add kind and name
-    parts.push(`${node.kind}: ${node.name}`);
+    // Build modifiers from optional boolean/string fields
+    const modifiers: string[] = [];
+    if (node.isExported) modifiers.push('exported');
+    if (node.isAsync) modifiers.push('async');
+    if (node.isStatic) modifiers.push('static');
+    if (node.isAbstract) modifiers.push('abstract');
+    if (node.visibility) modifiers.push(node.visibility);
+
+    // Add kind and name, with modifiers if present
+    if (modifiers.length > 0) {
+      parts.push(`${node.kind}: ${node.name} [${modifiers.join(', ')}]`);
+    } else {
+      parts.push(`${node.kind}: ${node.name}`);
+    }
 
     // Add qualified name if different from name
     if (node.qualifiedName && node.qualifiedName !== node.name) {
@@ -349,6 +368,16 @@ export class TextEmbedder {
 
     // Add file path
     parts.push(`file: ${node.filePath}`);
+
+    // Add decorators if present
+    if (node.decorators && node.decorators.length > 0) {
+      parts.push(`decorators: ${node.decorators.join(', ')}`);
+    }
+
+    // Add type parameters if present
+    if (node.typeParameters && node.typeParameters.length > 0) {
+      parts.push(`type parameters: ${node.typeParameters.join(', ')}`);
+    }
 
     // Add signature if present
     if (node.signature) {

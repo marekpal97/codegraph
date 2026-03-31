@@ -49,6 +49,7 @@ const DEFAULT_NODE_KINDS: Node['kind'][] = [
   'type_alias',
   'module',
   'component',
+  'directory',
 ];
 
 /**

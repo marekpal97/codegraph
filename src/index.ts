@@ -814,6 +814,35 @@ export class CodeGraph {
   }
 
   // ===========================================================================
+  // Directory Navigation
+  // ===========================================================================
+
+  /**
+   * Get the contents of a directory from the graph.
+   *
+   * @param dirPath - Relative directory path (e.g., 'src/auth'). Defaults to root '.'.
+   * @returns Child directories, files, and top-level symbols
+   */
+  getDirectoryContents(dirPath: string = '.'): {
+    directories: Node[];
+    files: Node[];
+    symbols: Node[];
+  } {
+    return this.graphManager.getDirectoryContents(dirPath);
+  }
+
+  /**
+   * Get a subtree of the directory hierarchy.
+   *
+   * @param dirPath - Starting directory (default: '.' root)
+   * @param maxDepth - Maximum traversal depth (default: Infinity)
+   * @returns Subgraph of directory and file nodes
+   */
+  getDirectoryTree(dirPath: string = '.', maxDepth: number = Infinity): Subgraph {
+    return this.graphManager.getDirectoryTree(dirPath, maxDepth);
+  }
+
+  // ===========================================================================
   // Semantic Search (Vector Embeddings)
   // ===========================================================================
 

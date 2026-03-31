@@ -13,6 +13,7 @@
  */
 export type NodeKind =
   | 'file'
+  | 'directory'
   | 'module'
   | 'class'
   | 'struct'

@@ -18,6 +18,7 @@ import {
 } from '../types';
 import { QueryBuilder } from '../db/queries';
 import { extractFromSource } from './tree-sitter';
+import { buildDirectoryNodes } from './directory-nodes';
 import { detectLanguage, isLanguageSupported, initGrammars, loadGrammarsForLanguages } from './grammars';
 import { logDebug, logWarn } from '../errors';
 import { captureException } from '../sentry';
@@ -467,14 +468,37 @@ export class ExtractionOrchestrator {
       }
     }
 
-    // Phase 3: Resolve references
+    // Phase 3: Generate directory hierarchy nodes
+    onProgress?.({
+      phase: 'storing',
+      current: 0,
+      total: 1,
+    });
+
+    // Remove any existing directory nodes (clean slate for full index)
+    this.queries.deleteNodesByKind('directory');
+
+    // Build directory nodes from the set of all indexed file paths
+    const indexedFiles = files.filter((f) => {
+      const tracked = this.queries.getFileByPath(f);
+      return tracked !== null;
+    });
+    const dirResult = buildDirectoryNodes(indexedFiles);
+    if (dirResult.nodes.length > 0) {
+      this.queries.insertNodes(dirResult.nodes);
+      this.queries.insertEdges(dirResult.edges);
+      totalNodes += dirResult.nodes.length;
+      totalEdges += dirResult.edges.length;
+    }
+
+    // Phase 4: Resolve references
     onProgress?.({
       phase: 'resolving',
       current: 0,
       total: 1,
     });
 
-    // TODO: Implement reference resolution in Phase 3
+    // TODO: Implement reference resolution in Phase 4
 
     return {
       success: errors.filter((e) => e.severity === 'error').length === 0,
@@ -837,6 +861,17 @@ export class ExtractionOrchestrator {
       nodesUpdated += result.nodes.length;
     }
 
+    // Rebuild directory hierarchy if any files changed
+    if (filesAdded > 0 || filesModified > 0 || filesRemoved > 0) {
+      this.queries.deleteNodesByKind('directory');
+      const allFiles = this.queries.getAllFiles().map((f) => f.path);
+      const dirResult = buildDirectoryNodes(allFiles);
+      if (dirResult.nodes.length > 0) {
+        this.queries.insertNodes(dirResult.nodes);
+        this.queries.insertEdges(dirResult.edges);
+      }
+    }
+
     return {
       filesChecked,
       filesAdded,
@@ -949,3 +984,4 @@ export class ExtractionOrchestrator {
 // Re-export useful types and functions
 export { extractFromSource } from './tree-sitter';
 export { detectLanguage, isLanguageSupported, isGrammarLoaded, getSupportedLanguages, initGrammars, loadGrammarsForLanguages, loadAllGrammars } from './grammars';
+export { buildDirectoryNodes, generateDirectoryNodeId } from './directory-nodes';

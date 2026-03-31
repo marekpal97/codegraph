@@ -2,9 +2,9 @@
  * MCP Stdio Transport
  *
  * Handles JSON-RPC 2.0 communication over stdin/stdout for MCP protocol.
+ * Uses Content-Length framing as specified by the MCP stdio transport spec.
  */
 
-import * as readline from 'readline';
 import { captureException } from '../sentry';
 
 /**
@@ -59,11 +59,15 @@ export type MessageHandler = (message: JsonRpcRequest | JsonRpcNotification) => 
 /**
  * Stdio Transport for MCP
  *
- * Reads JSON-RPC messages from stdin and writes responses to stdout.
+ * Reads JSON-RPC messages from stdin using Content-Length framing
+ * (as specified by the MCP stdio transport spec) and writes
+ * Content-Length-framed responses to stdout.
  */
 export class StdioTransport {
-  private rl: readline.Interface | null = null;
   private messageHandler: MessageHandler | null = null;
+  private buffer: Buffer = Buffer.alloc(0);
+  private messageQueue: string[] = [];
+  private processing = false;
 
   /**
    * Start listening for messages on stdin
@@ -71,33 +75,97 @@ export class StdioTransport {
   start(handler: MessageHandler): void {
     this.messageHandler = handler;
 
-    this.rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      terminal: false,
+    process.stdin.on('data', (chunk: Buffer) => {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+      this.extractMessages();
     });
 
-    this.rl.on('line', async (line) => {
-      await this.handleLine(line);
-    });
-
-    this.rl.on('close', () => {
+    process.stdin.on('end', () => {
       process.exit(0);
     });
+
+    process.stdin.on('close', () => {
+      process.exit(0);
+    });
+  }
+
+  /**
+   * Extract complete messages from the buffer.
+   *
+   * Supports both Content-Length framed messages (MCP standard)
+   * and newline-delimited JSON (legacy/simple clients).
+   */
+  private extractMessages(): void {
+    while (this.buffer.length > 0) {
+      const bufStr = this.buffer.toString('utf-8');
+
+      // Try Content-Length framing first
+      const headerMatch = bufStr.match(/^Content-Length:\s*(\d+)\r?\n\r?\n/);
+      if (headerMatch) {
+        const contentLength = parseInt(headerMatch[1]!, 10);
+        const headerBytes = Buffer.byteLength(headerMatch[0], 'utf-8');
+        const totalNeeded = headerBytes + contentLength;
+
+        if (this.buffer.length < totalNeeded) {
+          // Not enough data yet — wait for more
+          return;
+        }
+
+        const jsonBuf = this.buffer.slice(headerBytes, totalNeeded);
+        this.buffer = this.buffer.slice(totalNeeded);
+        this.messageQueue.push(jsonBuf.toString('utf-8'));
+        this.processQueue();
+        continue;
+      }
+
+      // Fallback: newline-delimited JSON
+      const newlineIdx = bufStr.indexOf('\n');
+      if (newlineIdx !== -1) {
+        const line = bufStr.slice(0, newlineIdx);
+        this.buffer = this.buffer.slice(Buffer.byteLength(line + '\n', 'utf-8'));
+        const trimmed = line.trim();
+        if (trimmed) {
+          this.messageQueue.push(trimmed);
+          this.processQueue();
+        }
+        continue;
+      }
+
+      // No complete message yet
+      return;
+    }
+  }
+
+  /**
+   * Process queued messages one at a time.
+   * Ensures each message handler completes before the next starts,
+   * preventing out-of-order responses when handlers are async.
+   */
+  private async processQueue(): Promise<void> {
+    if (this.processing) return;
+    this.processing = true;
+    try {
+      while (this.messageQueue.length > 0) {
+        const msg = this.messageQueue.shift()!;
+        await this.handleMessage(msg);
+      }
+    } finally {
+      this.processing = false;
+    }
   }
 
   /**
    * Stop listening
    */
   stop(): void {
-    if (this.rl) {
-      this.rl.close();
-      this.rl = null;
-    }
+    process.stdin.removeAllListeners();
   }
 
   /**
-   * Send a response
+   * Send a response as newline-delimited JSON.
+   *
+   * Claude Code v2.1+ uses newline-delimited JSON (not Content-Length framing)
+   * for the stdio MCP transport. Both input and output use `JSON\n` format.
    */
   send(response: JsonRpcResponse): void {
     const json = JSON.stringify(response);
@@ -113,7 +181,8 @@ export class StdioTransport {
       method,
       params,
     };
-    process.stdout.write(JSON.stringify(notification) + '\n');
+    const json = JSON.stringify(notification);
+    process.stdout.write(json + '\n');
   }
 
   /**
@@ -139,10 +208,10 @@ export class StdioTransport {
   }
 
   /**
-   * Handle an incoming line of JSON
+   * Handle an incoming JSON message string
    */
-  private async handleLine(line: string): Promise<void> {
-    const trimmed = line.trim();
+  private async handleMessage(raw: string): Promise<void> {
+    const trimmed = raw.trim();
     if (!trimmed) return;
 
     let parsed: unknown;

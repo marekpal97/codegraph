@@ -82,6 +82,7 @@ export function kindBonus(kind: Node['kind']): number {
     parameter: 0,
     namespace: 4,
     file: 0,
+    directory: 3,
     protocol: 6,
     enum_member: 3,
   };

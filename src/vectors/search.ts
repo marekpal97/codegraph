@@ -49,7 +49,7 @@ export class VectorSearchManager {
       // Try to load sqlite-vss extension
       await this.loadVssExtension();
       this.vssEnabled = true;
-      console.log('sqlite-vss extension loaded successfully');
+      process.stderr.write('[CodeGraph] sqlite-vss extension loaded successfully\n');
 
       // Create the VSS virtual table
       this.createVssTable();

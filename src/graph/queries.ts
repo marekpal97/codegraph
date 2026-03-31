@@ -7,6 +7,7 @@
 import { Node, Edge, Context, Subgraph, EdgeKind } from '../types';
 import { QueryBuilder } from '../db/queries';
 import { GraphTraverser } from './traversal';
+import { generateDirectoryNodeId } from '../extraction/directory-nodes';
 
 /**
  * Graph query manager for complex queries
@@ -377,6 +378,7 @@ export class GraphQueryManager {
 
     // Get all nodes of common kinds
     const kinds: Node['kind'][] = [
+      'directory',
       'file',
       'module',
       'class',
@@ -417,6 +419,76 @@ export class GraphQueryManager {
       edges,
       roots: [],
     };
+  }
+
+  /**
+   * Get the contents of a directory from the graph.
+   *
+   * Returns child directories, files, and (optionally) top-level symbols
+   * contained in each file.
+   *
+   * @param dirPath - Relative directory path (e.g., 'src/auth'). Defaults to '.' (root).
+   * @returns Categorized children: directories, files, and symbols
+   */
+  getDirectoryContents(dirPath: string = '.'): {
+    directories: Node[];
+    files: Node[];
+    symbols: Node[];
+  } {
+    const dirNodeId = generateDirectoryNodeId(dirPath);
+    const dirNode = this.queries.getNodeById(dirNodeId);
+
+    if (!dirNode) {
+      return { directories: [], files: [], symbols: [] };
+    }
+
+    const children = this.traverser.getChildren(dirNodeId);
+    const directories: Node[] = [];
+    const files: Node[] = [];
+    const symbols: Node[] = [];
+
+    for (const child of children) {
+      if (child.kind === 'directory') {
+        directories.push(child);
+      } else if (child.kind === 'file') {
+        files.push(child);
+        // Also collect top-level symbols in each file
+        const fileChildren = this.traverser.getChildren(child.id);
+        for (const sym of fileChildren) {
+          if (sym.kind !== 'import' && sym.kind !== 'export' && sym.kind !== 'parameter') {
+            symbols.push(sym);
+          }
+        }
+      }
+    }
+
+    // Sort directories and files alphabetically
+    directories.sort((a, b) => a.name.localeCompare(b.name));
+    files.sort((a, b) => a.name.localeCompare(b.name));
+
+    return { directories, files, symbols };
+  }
+
+  /**
+   * Get a subtree of the directory hierarchy.
+   *
+   * BFS traversal from a directory node, following only `contains` edges
+   * and collecting directory/file nodes up to a maximum depth.
+   *
+   * @param dirPath - Starting directory path (default: '.' root)
+   * @param maxDepth - Maximum depth to traverse (default: Infinity)
+   * @returns Subgraph containing directory and file nodes with containment edges
+   */
+  getDirectoryTree(dirPath: string = '.', maxDepth: number = Infinity): Subgraph {
+    const startId = generateDirectoryNodeId(dirPath);
+
+    return this.traverser.traverseBFS(startId, {
+      maxDepth,
+      edgeKinds: ['contains'],
+      nodeKinds: ['directory', 'file'],
+      direction: 'outgoing',
+      includeStart: true,
+    });
   }
 
   /**

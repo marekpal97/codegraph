@@ -357,6 +357,22 @@ export class QueryBuilder {
   }
 
   /**
+   * Delete all nodes of a given kind (e.g., 'directory').
+   *
+   * Edges referencing deleted nodes are cascade-deleted via FK constraints.
+   * Used during sync to rebuild directory nodes from scratch.
+   */
+  deleteNodesByKind(kind: Node['kind']): void {
+    // Invalidate cache for nodes of this kind
+    for (const [id, node] of this.nodeCache) {
+      if (node.kind === kind) {
+        this.nodeCache.delete(id);
+      }
+    }
+    this.db.prepare('DELETE FROM nodes WHERE kind = ?').run(kind);
+  }
+
+  /**
    * Get a node by ID
    */
   getNodeById(id: string): Node | null {

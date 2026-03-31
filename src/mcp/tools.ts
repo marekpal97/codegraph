@@ -6,6 +6,7 @@
 
 import CodeGraph, { findNearestCodeGraphRoot } from '../index';
 import type { Node, SearchResult, Subgraph, TaskContext, NodeKind } from '../types';
+import { generateDirectoryNodeId } from '../extraction/directory-nodes';
 import { createHash } from 'crypto';
 import { writeFileSync } from 'fs';
 import { clamp } from '../utils';
@@ -90,7 +91,7 @@ export const tools: ToolDefinition[] = [
         kind: {
           type: 'string',
           description: 'Filter by node kind',
-          enum: ['function', 'method', 'class', 'interface', 'type', 'variable', 'route', 'component'],
+          enum: ['function', 'method', 'class', 'interface', 'type', 'variable', 'route', 'component', 'directory'],
         },
         limit: {
           type: 'number',
@@ -213,6 +214,31 @@ export const tools: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        projectPath: projectPathProperty,
+      },
+    },
+  },
+  {
+    name: 'codegraph_directory',
+    description: 'Navigate the project directory hierarchy from the knowledge graph. Returns subdirectories, files, and optionally top-level symbols (classes, functions) in each file. Use this to drill into specific areas of the codebase by package/subsystem.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Directory path to explore (e.g., "src/auth"). Defaults to root "." if not specified.',
+          default: '.',
+        },
+        depth: {
+          type: 'number',
+          description: 'How many levels deep to show (default: 1). Use 0 for just immediate children.',
+          default: 1,
+        },
+        includeSymbols: {
+          type: 'boolean',
+          description: 'Include top-level symbols (classes, functions) per file (default: false)',
+          default: false,
+        },
         projectPath: projectPathProperty,
       },
     },
@@ -364,6 +390,8 @@ export class ToolHandler {
           return await this.handleNode(args);
         case 'codegraph_status':
           return await this.handleStatus(args);
+        case 'codegraph_directory':
+          return await this.handleDirectory(args);
         case 'codegraph_files':
           return await this.handleFiles(args);
         default:
@@ -595,6 +623,92 @@ export class ToolHandler {
         lines.push(`- ${lang}: ${count}`);
       }
     }
+
+    return this.textResult(lines.join('\n'));
+  }
+
+  /**
+   * Handle codegraph_directory - navigate directory hierarchy from the graph
+   */
+  private async handleDirectory(args: Record<string, unknown>): Promise<ToolResult> {
+    const cg = this.getCodeGraph(args.projectPath as string | undefined);
+    const dirPath = (args.path as string) || '.';
+    const depth = (args.depth as number) ?? 1;
+    const includeSymbols = (args.includeSymbols as boolean) ?? false;
+
+    if (depth === 0 || depth === 1) {
+      // Single-level: use getDirectoryContents for richer output
+      const contents = cg.getDirectoryContents(dirPath);
+
+      if (contents.directories.length === 0 && contents.files.length === 0) {
+        return this.textResult(`No directory found at "${dirPath}". Run codegraph_status to check if the index is built.`);
+      }
+
+      const lines: string[] = [];
+      lines.push(`📁 ${dirPath}/`);
+      lines.push('');
+
+      if (contents.directories.length > 0) {
+        lines.push('Subdirectories:');
+        for (const dir of contents.directories) {
+          lines.push(`  📁 ${dir.name}/`);
+        }
+        lines.push('');
+      }
+
+      if (contents.files.length > 0) {
+        lines.push('Files:');
+        for (const file of contents.files) {
+          lines.push(`  📄 ${file.name} (${file.language})`);
+        }
+        lines.push('');
+      }
+
+      if (includeSymbols && contents.symbols.length > 0) {
+        lines.push('Top-level symbols:');
+        for (const sym of contents.symbols) {
+          const sig = sym.signature ? ` - ${sym.signature}` : '';
+          lines.push(`  ${sym.kind}: ${sym.name}${sig} (${sym.filePath}:${sym.startLine})`);
+        }
+      }
+
+      return this.textResult(lines.join('\n'));
+    }
+
+    // Multi-level: use getDirectoryTree for BFS traversal
+    const tree = cg.getDirectoryTree(dirPath, depth);
+    const lines: string[] = [];
+    lines.push(`📁 ${dirPath}/ (depth: ${depth})`);
+    lines.push('');
+
+    // Group nodes by parent directory for tree rendering
+    const nodesByParent = new Map<string, string[]>();
+    for (const edge of tree.edges) {
+      if (edge.kind !== 'contains') continue;
+      const children = nodesByParent.get(edge.source) || [];
+      children.push(edge.target);
+      nodesByParent.set(edge.source, children);
+    }
+
+    // Simple tree rendering
+    const rootId = generateDirectoryNodeId(dirPath);
+    const renderTree = (nodeId: string, indent: string): void => {
+      const children = nodesByParent.get(nodeId) || [];
+      for (let i = 0; i < children.length; i++) {
+        const childId = children[i]!;
+        const child = tree.nodes.get(childId);
+        if (!child) continue;
+        const isLast = i === children.length - 1;
+        const prefix = isLast ? '└── ' : '├── ';
+        const icon = child.kind === 'directory' ? '📁' : '📄';
+        const suffix = child.kind === 'directory' ? '/' : ` (${child.language})`;
+        lines.push(`${indent}${prefix}${icon} ${child.name}${suffix}`);
+        if (child.kind === 'directory') {
+          renderTree(childId, indent + (isLast ? '    ' : '│   '));
+        }
+      }
+    };
+    renderTree(rootId, '');
 
     return this.textResult(lines.join('\n'));
   }
